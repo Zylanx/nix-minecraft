@@ -18,22 +18,60 @@ let
   inherit (lib) mkOption mkIf types;
   cfg = config.modpack.ftb;
 
+  curseDownload = pkgs.callPackage ./downloaders/curseforge-file.nix {};
+
   json = lib.importJSON (pkgs.fetchurl {
     url = "https://api.modpacks.ch/public/modpack/${toString cfg.id}/${toString cfg.version}";
     inherit (cfg) hash;
   });
 
-  files = map
-    (f: {
-      path = "${f.path}/${f.name}";
-      source = pkgs.fetchurl {
-        inherit (f) sha1;
-        url = builtins.replaceStrings [ " " ] [ "%20" ] f.url;
-        name = lib.strings.sanitizeDerivationName f.name;
-        curlOpts = "--globoff"; # do not misinterpret [] brackets
-      };
-    })
-    (builtins.filter (f: !f.serveronly) json.files);
+  clientFiles = builtins.filter (f: !f.serveronly) json.files;
+
+  # `right` contains normal files, `wrong` contains curseforge files
+  partitionedFiles = builtins.partition (f: (f.url or "") != "") clientFiles;
+
+  filesDownloaded =
+    {
+        normal = map
+            (f: {
+                path = "${f.path}/${f.name}";
+                source = pkgs.fetchurl {
+                    inherit (f) sha1;
+                    url = builtins.replaceStrings [ " " ] [ "%20" ] f.url;
+                    name = lib.strings.sanitizeDerivationName f.name;
+                    curlOpts = "--globoff";
+                };
+            })
+            partitionedFiles.right;
+
+        curse = map
+            (f: {
+                path = "${f.path}/${f.name}";
+                source = curseDownload.downloadRaw {
+                    name = lib.strings.sanitizeDerivationName f.name;
+                    projectId = f.curseforge.project;
+                    fileId = f.curseforge.file;
+                    hash = f.sha1;
+                    hashAlgo = "sha1";
+                };
+            })
+            partitionedFiles.wrong;
+    };
+
+  files = builtins.concatLists [ filesDownloaded.normal filesDownloaded.curse ];
+   
+
+  #files = map
+  #  (f: {
+  #    path = "${f.path}/${f.name}";
+  #    source = pkgs.fetchurl {
+  #      inherit (f) sha1;
+  #      url = builtins.replaceStrings [ " " ] [ "%20" ] f.url;
+  #      name = lib.strings.sanitizeDerivationName f.name;
+  #      curlOpts = "--globoff"; # do not misinterpret [] brackets
+  #    };
+  #  })
+  #  (builtins.filter (f: !f.serveronly) json.files);
 
   forgeVersion = (lib.findFirst
     (t: t.name == "forge")
